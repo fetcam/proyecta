@@ -29,9 +29,9 @@ Usa el mismo `--data-dir` si lo habías personalizado. Los datos existentes se c
 
 ## Asesor de skills
 
-En **Asesor de skills**, Proyecta lista si existen ubicaciones habituales (`~/.agents/skills`, `~/.codex/skills`, `~/.claude/skills` y equivalentes del proyecto) sin recorrer otras carpetas. Elige qué directorio agregar, asigna cada fuente a un entorno (por ejemplo Codex o Claude Code) y escanéala. Puedes indicar una carpeta individual con `SKILL.md` o una carpeta padre con subcarpetas de skills. El catálogo solo guarda nombre, descripción, etiquetas, ruta relativa y huella. El escaneo lee hasta 64 KB por `SKILL.md`, no sigue enlaces simbólicos y tiene límites de cantidad.
+En **Asesor de skills**, Proyecta detecta rutas locales conocidas de Codex (`~/.codex/skills`, `~/.agents/skills`) y Claude Code (`~/.claude/skills`), sin recorrer otras carpetas. Puedes importarlas y escanearlas con un clic. También puedes agregar una carpeta local descargada desde ChatGPT y etiquetarla como ChatGPT Personal o Business. ChatGPT administra skills dentro del producto y no expone una carpeta local de cuenta que Proyecta pueda recorrer; no se presenta como sincronización automática. El catálogo guarda nombre, descripción, etiquetas, ruta relativa y huella. El escaneo lee hasta 64 KB por `SKILL.md`, no sigue enlaces simbólicos y tiene límites de cantidad.
 
-Las recomendaciones locales comparan el título, objetivo, criterios, notas y etapa con el nombre, descripción y etiquetas. Muestran los términos coincidentes y compatibilidad del proveedor. Puedes revisar hasta tres opciones, seleccionarlas, asociarlas a una tarea u omitirlas. En preferencias eliges sugerencia manual, al abrir una tarea o al editar su alcance. Proyecta no ejecuta ni instala skills; al quitar una fuente, sus referencias se retiran de las tareas y queda una nota de actividad.
+Las recomendaciones locales comparan el título, objetivo, criterios, notas y etapa con el nombre, descripción y etiquetas. Muestran los términos coincidentes y compatibilidad del proveedor. Puedes revisar hasta tres opciones, seleccionarlas, asociarlas a una tarea u omitirlas. En preferencias eliges sugerencia manual, al abrir una tarea o al editar su alcance. Proyecta no ejecuta ni instala skills; al quitar una fuente, sus referencias se retiran de las tareas y queda una nota de actividad. El flujo por plataforma y sus límites está en [`EXPLORACION_E_IMPORTACION_DE_SKILLS.md`](EXPLORACION_E_IMPORTACION_DE_SKILLS.md).
 
 ## Configurar un proyecto
 
@@ -106,6 +106,12 @@ El puente no inicia sesión en Claude o ChatGPT: utiliza la sesión que ya tiene
 | Google Drive | Asociación de carpeta/documento; enlace del tablero | OAuth e importación del contenido |
 
 Iniciar sesión con ChatGPT no concede acceso a sus conversaciones. La API de conversaciones de OpenAI no equivale al historial de una cuenta ChatGPT. Esta versión no ofrece botones de conexión ficticios ni reutiliza cookies del navegador.
+
+## Próxima evolución: importar proyectos y continuar desarrollo
+
+La siguiente capacidad propuesta permitirá capturar contexto de proyectos existentes en ChatGPT Personal, Business/Work, Codex Cloud y otros agentes; revisar el estado contra el repositorio; y generar un expediente técnico versionado con diseño, avance por componente, brechas, backlog, pruebas, decisiones y prompt de continuidad. La 1.2 no hace esta importación automática. El alcance, límites por proveedor, fases y criterios de aceptación están en [`IMPORTACION_CONTEXTO_Y_CONTINUIDAD_TECNICA.md`](IMPORTACION_CONTEXTO_Y_CONTINUIDAD_TECNICA.md).
+
+ChatGPT Personal puede ofrecer exportación de datos; ChatGPT Business no ofrece exportación autoservicio de conversaciones. Por eso, la primera fase se apoya en prompts de captura y resúmenes elegidos por el usuario, con revisión antes de importar. Las futuras conexiones solo usarán APIs oficiales y permisos explícitos.
 
 Documentación consultada: https://developers.openai.com/siwc/quickstart y https://support.claude.com/es/articles/13346720-exporta-los-datos-de-tu-organizacion (8 octubre 2026).
 

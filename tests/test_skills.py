@@ -71,12 +71,21 @@ class SkillAdvisorTests(unittest.TestCase):
     def test_discovery_lists_only_existing_conventional_directories(self):
         common = self.root / 'home' / '.agents' / 'skills'
         common.mkdir(parents=True)
+        claude = self.root / 'home' / '.claude' / 'skills'
+        claude.mkdir(parents=True)
         with patch('skills.Path.home', return_value=self.root / 'home'):
             found = self.store.discover_skill_directories()
-        self.assertEqual(len(found), 1)
-        self.assertEqual(found[0]['provider'], 'shared')
-        self.assertFalse(found[0]['registered'])
-        self.assertEqual(found[0]['path'], str(common))
+        self.assertEqual({item['provider'] for item in found}, {'shared', 'claude_code'})
+        self.assertEqual({item['path'] for item in found}, {str(common), str(claude)})
+        self.assertTrue(all(item['discovery'] == 'filesystem' for item in found))
+        self.assertTrue(all(not item['registered'] for item in found))
+
+    def test_discovery_does_not_guess_chatgpt_account_skill_directories(self):
+        home = self.root / 'home'
+        (home / '.chatgpt' / 'skills').mkdir(parents=True)
+        with patch('skills.Path.home', return_value=home):
+            found = self.store.discover_skill_directories()
+        self.assertFalse(any(item['provider'].startswith('chatgpt_') for item in found))
 
 
 if __name__ == '__main__':

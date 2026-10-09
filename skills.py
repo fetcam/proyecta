@@ -185,6 +185,7 @@ class Skills:
             (home / '.claude' / 'skills', 'Skills de Claude Code', 'claude_code'),
             (app_root / '.agents' / 'skills', 'Skills del proyecto', 'shared'),
             (app_root / '.codex' / 'skills', 'Skills del proyecto', 'codex'),
+            (app_root / '.claude' / 'skills', 'Skills Claude Code del proyecto', 'claude_code'),
         ]
         found = []
         seen = set()
@@ -213,7 +214,9 @@ class Skills:
                 continue
             seen.add(key)
             found.append({'label': label, 'provider': provider, 'path': normalized,
-                          'registered': key in registered})
+                          'registered': key in registered,
+                          'discovery': 'filesystem',
+                          'note': 'Directorio local detectado; se leerán únicamente metadatos SKILL.md.'})
         return found
 
     def validate_skill_snapshot(self, obj):
