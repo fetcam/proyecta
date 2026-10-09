@@ -1,0 +1,12 @@
+const assert = require('node:assert/strict');
+const { readFileSync } = require('node:fs');
+const js = readFileSync('static/app.js', 'utf8');
+const html = readFileSync('static/index.html', 'utf8');
+for (const value of ['pendiente','lista','en_curso','bloqueada','en_revision','en_validacion','completada']) assert.ok(js.includes(value), `status ${value}`);
+for (const value of ['objective','acceptance','dependencies','ai_profile','execution_environment','branch','commit_ref','pull_request','tests','checkpoint','skill_refs']) assert.ok(js.includes(`name="${value}"`) || js.includes(`'${value}'`), `task field ${value}`);
+assert.ok(js.includes('/api/task-context/'), 'task context export link');
+assert.match(js, /Preparar contexto/);
+assert.match(js, /Criterios de aceptación/);
+assert.match(js, /Punto de reanudación/);
+assert.match(html, /Flujo básico de producción/);
+console.error('Production task workflow UI contract passed');

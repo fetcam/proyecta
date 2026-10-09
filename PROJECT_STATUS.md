@@ -1,16 +1,12 @@
 # Proyecta — estado maestro
 
-Repositorio central y fuente de verdad técnica: https://github.com/fetcam/proyecta
-Decisión del usuario: 2026-10-09. Acceso de lectura y escritura confirmado.
-Repositorio público, rama principal: main.
-Publicación inicial: código Proyecta 1.1, pruebas y documentación.
+Repositorio central y fuente técnica: https://github.com/fetcam/proyecta
+Rama de desarrollo: `unlazy/tree3-skill-advisor-production`. La rama principal `main` se conserva sin cambios.
 
-Versión: 1.1.0. Fecha: 2026-10-08.
+Versión en desarrollo: 1.2.0.
 
-Implementado: almacenamiento local, proyectos, tareas, decisiones, historial, atención, respaldos; perfiles IA y roles; selección por proyecto de estado y decisiones; intercambio JSON revisado; deduplicación y conflictos; puente MCP stdio; tablero con fase, avance, próxima acción, IA y enlaces GitHub/Drive.
+Implementado en esta rama: flujo de tareas de producción (estados, aceptación, dependencias, rol/IA, contexto de entrega, pruebas y reanudación); Asesor de skills con fuentes locales explícitas, catálogo de metadatos, ranking explicable, alternativas, selección y opciones de sugerencia. La aplicación sigue siendo local-first y no incorpora ejecución/dispatch de agentes ni lectura automática de historiales.
 
-Verificación: 23 pruebas Python y dos flujos DOM. Sin prueba visual Chromium ni instalación en equipos del usuario.
+Verificación de esta revisión: pruebas unitarias de Store, integraciones y Asesor; sintaxis Python/JavaScript; contrato estático de la UI. Sin validación visual Chromium ni instalación en Linux Mint del usuario. Los flujos DOM de regresión existentes dependen de `jsdom`, ausente en el entorno.
 
-Pendientes: autenticar y probar clientes MCP reales; conectar GitHub y Google Drive con OAuth y lectura de contenido. No existe acceso automático al historial de cuentas de ChatGPT/Claude.
-
-Próximo paso: instalar 1.1 en Linux Mint sobre el mismo directorio de datos y configurar perfiles y fuentes para un proyecto piloto.
+Siguiente paso: revisar la rama y probar la interfaz y migración sobre una copia del directorio de datos del usuario.

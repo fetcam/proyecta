@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Proyecta 1.0: local-first project control center, Python standard library only."""
+"""Proyecta 1.2: local-first project control center, Python standard library only."""
 import argparse
 from contextlib import contextmanager
 import io
@@ -16,11 +16,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
-VERSION = '1.1.0'
+VERSION = '1.2.0'
 ROOT = Path(__file__).resolve().parent
 MAX_BODY = 5 * 1024 * 1024
-STATUSES = ('pendiente', 'en_curso', 'bloqueada', 'completada')
+STATUSES = ('pendiente', 'lista', 'en_curso', 'bloqueada', 'en_revision', 'en_validacion', 'completada')
 KINDS = ('nota', 'decision', 'ia', 'prueba', 'despliegue')
+TASK_ROLES = ('coordinacion', 'implementacion', 'arquitectura', 'revision', 'validacion', 'documentacion', 'otro')
+TASK_ENVIRONMENTS = ('development', 'test', 'staging', 'production')
 
 def now():
     return datetime.now(timezone.utc).isoformat(timespec='seconds')
@@ -49,8 +51,9 @@ def link(value):
     return value
 
 from integrations import Integrations
+from skills import Skills, SKILL_PROVIDERS
 
-class Store(Integrations):
+class Store(Skills, Integrations):
     def __init__(self, path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -67,7 +70,13 @@ class Store(Integrations):
                 id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
                 title TEXT NOT NULL, status TEXT NOT NULL, needs_me INTEGER NOT NULL,
                 owner TEXT NOT NULL, notes TEXT NOT NULL, evidence TEXT NOT NULL,
-                updated_at TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1);
+                updated_at TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1,
+                objective TEXT NOT NULL DEFAULT '', acceptance TEXT NOT NULL DEFAULT '',
+                dependencies TEXT NOT NULL DEFAULT '[]', ai_profile TEXT NOT NULL DEFAULT '',
+                role TEXT NOT NULL DEFAULT '', skill_refs TEXT NOT NULL DEFAULT '[]',
+                branch TEXT NOT NULL DEFAULT '', commit_ref TEXT NOT NULL DEFAULT '',
+                pull_request TEXT NOT NULL DEFAULT '', tests TEXT NOT NULL DEFAULT '',
+                checkpoint TEXT NOT NULL DEFAULT '', execution_environment TEXT NOT NULL DEFAULT 'development');
             CREATE TABLE IF NOT EXISTS events (
                 id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
                 kind TEXT NOT NULL, actor TEXT NOT NULL, text TEXT NOT NULL,
@@ -76,7 +85,22 @@ class Store(Integrations):
             ''')
             if 'phase' not in [r[1] for r in db.execute('PRAGMA table_info(projects)')]:
                 db.execute("ALTER TABLE projects ADD COLUMN phase TEXT NOT NULL DEFAULT ''")
+            task_columns = {r[1] for r in db.execute('PRAGMA table_info(tasks)')}
+            migrations = {
+                'objective': "TEXT NOT NULL DEFAULT ''", 'acceptance': "TEXT NOT NULL DEFAULT ''",
+                'dependencies': "TEXT NOT NULL DEFAULT '[]'", 'ai_profile': "TEXT NOT NULL DEFAULT ''",
+                'role': "TEXT NOT NULL DEFAULT ''", 'skill_refs': "TEXT NOT NULL DEFAULT '[]'",
+                'branch': "TEXT NOT NULL DEFAULT ''", 'commit_ref': "TEXT NOT NULL DEFAULT ''",
+                'pull_request': "TEXT NOT NULL DEFAULT ''", 'tests': "TEXT NOT NULL DEFAULT ''",
+                'checkpoint': "TEXT NOT NULL DEFAULT ''",
+                'execution_environment': "TEXT NOT NULL DEFAULT 'development'",
+            }
+            for column, sql_type in migrations.items():
+                if column not in task_columns:
+                    db.execute(f'ALTER TABLE tasks ADD COLUMN {column} {sql_type}')
+            db.execute('PRAGMA user_version=2')
             self.init_integrations(db)
+            self.init_skills(db)
     @contextmanager
     def connect(self):
         db = sqlite3.connect(self.path, timeout=10)
@@ -89,9 +113,9 @@ class Store(Integrations):
             db.close()
     def snapshot(self):
         with self.lock, self.connect() as db:
-            return {**self.integration_snapshot(db), 'schema_version': 1, 'app_version': VERSION, 'exported_at': now(),
+            return {**self.integration_snapshot(db), **self.skill_snapshot(db), 'schema_version': 2, 'app_version': VERSION, 'exported_at': now(),
                     'projects': [dict(r) for r in db.execute('SELECT * FROM projects ORDER BY id')],
-                    'tasks': [dict(r) for r in db.execute('SELECT * FROM tasks ORDER BY id')],
+                    'tasks': [self.task_record(dict(r)) for r in db.execute('SELECT * FROM tasks ORDER BY id')],
                     'events': [dict(r) for r in db.execute('SELECT * FROM events ORDER BY id DESC')]}
     def event(self, db, pid, kind, actor, text, evidence=''):
         db.execute('INSERT INTO events(project_id,kind,actor,text,evidence,created_at) VALUES(?,?,?,?,?,?)',
@@ -105,15 +129,83 @@ class Store(Integrations):
             raise ValueError('Estado o prioridad inválidos.')
         if values[10] not in ('','Diseño','MVP','Desarrollo','Pruebas','Listo'): raise ValueError('Fase inválida.')
         return values
-    def task_values(self, obj):
+    def task_record(self, row):
+        for key in ('dependencies', 'skill_refs'):
+            try:
+                row[key] = json.loads(row.get(key, '[]') or '[]') if isinstance(row.get(key), str) else row.get(key, [])
+            except (TypeError, json.JSONDecodeError):
+                row[key] = []
+        return row
+    def _id_list(self, obj, key, limit=50):
+        value = obj.get(key, [])
+        if isinstance(value, str):
+            try:
+                value = json.loads(value) if value.strip().startswith('[') else [int(x.strip()) for x in value.split(',') if x.strip()]
+            except (ValueError, json.JSONDecodeError):
+                raise ValueError(f'Lista inválida: {key}.')
+        if not isinstance(value, list) or len(value) > limit or any(type(x) is not int or x <= 0 for x in value):
+            raise ValueError(f'Lista inválida: {key}.')
+        if len(value) != len(set(value)):
+            raise ValueError(f'La lista {key} contiene duplicados.')
+        return value
+    def _validate_dependencies(self, db, pid, rid, dependencies):
+        if rid in dependencies:
+            raise ValueError('Una tarea no puede depender de sí misma.')
+        graph = {}
+        rows = db.execute('SELECT id,project_id,dependencies FROM tasks').fetchall()
+        for row in rows:
+            if row['project_id'] == pid and row['id'] != rid:
+                try: graph[row['id']] = json.loads(row['dependencies'] or '[]')
+                except (TypeError, json.JSONDecodeError): graph[row['id']] = []
+        available = set(graph)
+        for dep in dependencies:
+            row = db.execute('SELECT project_id FROM tasks WHERE id=?', (dep,)).fetchone()
+            if not row or row['project_id'] != pid:
+                raise ValueError(f'La dependencia #{dep} no existe en este proyecto.')
+            if dep not in available:
+                raise ValueError(f'La dependencia #{dep} no está disponible.')
+        graph[rid or -1] = dependencies
+        visiting, visited = set(), set()
+        def visit(node):
+            if node in visiting: raise ValueError('Las dependencias forman un ciclo.')
+            if node in visited: return
+            visiting.add(node)
+            for dep in graph.get(node, []): visit(dep)
+            visiting.remove(node); visited.add(node)
+        for node in graph: visit(node)
+    def task_values(self, obj, db=None, pid=None, rid=None):
         status = field(obj, 'status',30,True)
         if status not in STATUSES or type(obj.get('needs_me')) is not bool:
             raise ValueError('Estado o necesita atención inválidos.')
         evidence = field(obj,'evidence',4000)
         if status == 'completada' and not evidence:
             raise ValueError('Registra evidencia o un resultado verificable para completar una tarea.')
+        dependencies = self._id_list(obj, 'dependencies')
+        skills = self._id_list(obj, 'skill_refs', 20)
+        ai_profile = field(obj, 'ai_profile', 40)
+        role = field(obj, 'role', 40)
+        environment = field(obj, 'execution_environment', 30) or 'development'
+        if ai_profile and ai_profile not in SKILL_PROVIDERS:
+            raise ValueError('Perfil de IA inválido para la tarea.')
+        if role and role not in TASK_ROLES:
+            raise ValueError('Rol de trabajo inválido.')
+        if environment not in TASK_ENVIRONMENTS:
+            raise ValueError('Entorno de ejecución inválido.')
+        if db is not None and pid is not None:
+            self._validate_dependencies(db, pid, rid, dependencies)
+            if status == 'completada' and dependencies:
+                incomplete = [dep for dep in dependencies if not db.execute('SELECT 1 FROM tasks WHERE id=? AND status=?', (dep, 'completada')).fetchone()]
+                if incomplete:
+                    raise ValueError('Completa primero las tareas previas: ' + ', '.join('#'+str(x) for x in incomplete))
+            if skills:
+                found = {r[0] for r in db.execute('SELECT id FROM skill_catalog WHERE id IN ('+','.join('?' for _ in skills)+')', skills)}
+                if found != set(skills):
+                    raise ValueError('Una skill seleccionada ya no está en el catálogo. Actualiza las recomendaciones.')
+        pr = link(field(obj, 'pull_request', 1000))
         return [field(obj,'title',240,True), status, int(obj['needs_me']), field(obj,'owner',120),
-                field(obj,'notes',4000), evidence]
+                field(obj,'notes',4000), evidence, field(obj,'objective',2000), field(obj,'acceptance',3000),
+                json.dumps(dependencies), ai_profile, role, json.dumps(skills), field(obj,'branch',200),
+                field(obj,'commit_ref',200), pr, field(obj,'tests',3000), field(obj,'checkpoint',2000), environment]
     def save(self, kind, obj, rid=None):
         if not isinstance(obj,dict):
             raise ValueError('Se esperaba un objeto JSON.')
@@ -127,18 +219,23 @@ class Store(Integrations):
                     rid = db.execute('INSERT INTO projects(name,company,goal,status,priority,next_action,repository,branch,documents,environment,phase,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)', values+[now()]).lastrowid
                 self.event(db,rid,'nota','Usuario', 'Estado del proyecto actualizado.' if obj.get('version') else 'Proyecto creado.')
             elif kind == 'tasks':
-                values = self.task_values(obj)
                 if rid:
                     old = self.check_version(db,kind,rid,obj)
                     pid = old['project_id']
-                    db.execute('UPDATE tasks SET title=?,status=?,needs_me=?,owner=?,notes=?,evidence=?,updated_at=?,version=version+1 WHERE id=?',values+[now(),rid])
                 else:
                     pid = obj.get('project_id')
                     if type(pid) is not int or not db.execute('SELECT id FROM projects WHERE id=?',(pid,)).fetchone():
                         raise ValueError('Proyecto inexistente.')
-                    rid = db.execute('INSERT INTO tasks(project_id,title,status,needs_me,owner,notes,evidence,updated_at) VALUES(?,?,?,?,?,?,?,?)',[pid]+values+[now()]).lastrowid
+                values = self.task_values(obj, db, pid, rid)
+                columns = ('title','status','needs_me','owner','notes','evidence','objective','acceptance',
+                           'dependencies','ai_profile','role','skill_refs','branch','commit_ref','pull_request',
+                           'tests','checkpoint','execution_environment')
+                if rid:
+                    db.execute('UPDATE tasks SET '+','.join(c+'=?' for c in columns)+',updated_at=?,version=version+1 WHERE id=?',values+[now(),rid])
+                else:
+                    rid = db.execute('INSERT INTO tasks(project_id,'+','.join(columns)+',updated_at) VALUES('+','.join('?' for _ in range(len(columns)+2))+')',[pid]+values+[now()]).lastrowid
                 db.execute('UPDATE projects SET updated_at=?,version=version+1 WHERE id=?',(now(),pid))
-                self.event(db,pid,'nota','Usuario',f'Tarea #{rid}: {values[0]} → {values[1]}',values[-1])
+                self.event(db,pid,'nota','Usuario',f'Tarea #{rid}: {values[0]} → {values[1]}',values[5])
             elif kind == 'events':
                 pid = obj.get('project_id')
                 if type(pid) is not int or not db.execute('SELECT id FROM projects WHERE id=?',(pid,)).fetchone():
@@ -159,7 +256,7 @@ class Store(Integrations):
             raise RuntimeError('Este registro cambió en otra ventana. Recarga antes de guardar.')
         return row
     def import_snapshot(self, obj):
-        if not isinstance(obj,dict) or obj.get('schema_version') != 1:
+        if not isinstance(obj,dict) or obj.get('schema_version') not in (1, 2):
             raise ValueError('Formato de respaldo incompatible.')
         projects, tasks, events = (obj.get(k) for k in ('projects','tasks','events'))
         if not all(isinstance(x,list) for x in (projects,tasks,events)) or sum(map(len,(projects,tasks,events))) > 20000:
@@ -168,10 +265,14 @@ class Store(Integrations):
         for p in projects:
             if not isinstance(p,dict):
                 raise ValueError('Proyecto inválido en respaldo.')
+            for key in ('name','company','goal','status','priority','next_action','repository','branch','documents','environment','updated_at','version'):
+                if key not in p:
+                    raise KeyError(key)
             self.project_values(p)
             if type(p.get('id')) is not int or p['id'] <= 0 or p['id'] in ids:
                 raise ValueError('Identificador de proyecto inválido o duplicado.')
             ids.add(p['id'])
+        normalized_tasks = []
         for collection in (tasks,events):
             seen = set()
             for r in collection:
@@ -183,7 +284,14 @@ class Store(Integrations):
                     if type(r.get('needs_me')) not in (bool,int) or r['needs_me'] not in (0,1):
                         raise ValueError('Indicador de atención inválido.')
                     normalized['needs_me'] = bool(r['needs_me'])
+                    defaults = {'objective':'','acceptance':'','dependencies':[],'ai_profile':'','role':'',
+                                'skill_refs':[],'branch':'','commit_ref':'','pull_request':'','tests':'',
+                                'checkpoint':'','execution_environment':'development'}
+                    for key, value in defaults.items(): normalized.setdefault(key, value)
                     self.task_values(normalized)
+                    normalized['dependencies'] = self._id_list(normalized, 'dependencies')
+                    normalized['skill_refs'] = self._id_list(normalized, 'skill_refs', 20)
+                    normalized_tasks.append(normalized)
                 else:
                     if field(r,'kind',30,True) not in KINDS:
                         raise ValueError('Tipo de evento inválido.')
@@ -195,20 +303,63 @@ class Store(Integrations):
                 if collection is not events and (type(r.get('version')) is not int or r['version'] < 1):
                     raise ValueError('Versión de registro inválida.')
         integrations = self.validate_integrations(obj,ids)
+        skill_data = self.validate_skill_snapshot(obj)
+        catalog_ids = {row['id'] for row in skill_data['skills']}
+        task_by_id = {row['id']: row for row in normalized_tasks}
+        graph = {}
+        for row in normalized_tasks:
+            graph[row['id']] = row['dependencies']
+            for dep in row['dependencies']:
+                target = task_by_id.get(dep)
+                if not target or target['project_id'] != row['project_id']:
+                    raise ValueError(f'La dependencia #{dep} no existe en el mismo proyecto.')
+                if row['status'] == 'completada' and target['status'] != 'completada':
+                    raise ValueError('Un respaldo marca como completada una tarea con dependencias pendientes.')
+            if any(skill_id not in catalog_ids for skill_id in row['skill_refs']):
+                raise ValueError('Una tarea referencia skills que no aparecen en el respaldo.')
+        visiting, visited = set(), set()
+        def visit_task(task_id):
+            if task_id in visiting: raise ValueError('Las dependencias del respaldo forman un ciclo.')
+            if task_id in visited: return
+            visiting.add(task_id)
+            for dep in graph.get(task_id, []): visit_task(dep)
+            visiting.remove(task_id); visited.add(task_id)
+        for task_id in graph: visit_task(task_id)
         with self.lock, self.connect() as db:
             # Preserve the previous state before replacing any data.
             backup = self.path.parent / ('before-import-' + datetime.now().strftime('%Y%m%d-%H%M%S') + '-' + secrets.token_hex(3) + '.json')
             backup.write_text(json.dumps(self.snapshot(),ensure_ascii=False,indent=2),encoding='utf-8')
-            for table in ('imported_items','project_sources','accounts','events','tasks','projects'):
+            for table in ('imported_items','project_sources','accounts','events','tasks','skill_catalog','skill_sources','projects'):
                 db.execute('DELETE FROM '+table)
-            for table, rows in (('projects',projects),('tasks',tasks),('events',events)):
+            for table, rows in (('projects',projects),('tasks',normalized_tasks),('events',events)):
                 cols = [r[1] for r in db.execute('PRAGMA table_info('+table+')')]
                 for row in rows:
-                    db.execute('INSERT INTO '+table+' ('+','.join(cols)+') VALUES('+','.join('?' for _ in cols)+')',[row.get('phase','') if c=='phase' else row[c] for c in cols])
+                    values = []
+                    for c in cols:
+                        value = row.get(c)
+                        if table == 'tasks' and c in ('dependencies','skill_refs'):
+                            value = json.dumps(row.get(c, []))
+                        elif value is None and c in ('objective','acceptance','ai_profile','role','branch','commit_ref','pull_request','tests','checkpoint'):
+                            value = ''
+                        elif value is None and c == 'execution_environment': value = 'development'
+                        elif value is None and c in ('dependencies','skill_refs'): value = '[]'
+                        values.append(value)
+                    db.execute('INSERT INTO '+table+' ('+','.join(cols)+') VALUES('+','.join('?' for _ in cols)+')',values)
             for table, rows in integrations.items():
                 cols = [r[1] for r in db.execute('PRAGMA table_info('+table+')')]
                 for row in rows:
-                    db.execute('INSERT INTO '+table+' ('+','.join(cols)+') VALUES('+','.join('?' for _ in cols)+')',[row.get('phase','') if c=='phase' else row[c] for c in cols])
+                    db.execute('INSERT INTO '+table+' ('+','.join(cols)+') VALUES('+','.join('?' for _ in cols)+')',[row[c] for c in cols])
+            for row in skill_data['skill_sources']:
+                db.execute('INSERT INTO skill_sources(id,label,provider,path,enabled) VALUES(?,?,?,?,?)',
+                           (row['id'],row['label'],row['provider'],row['path'],int(row['enabled'])))
+            for row in skill_data['skills']:
+                db.execute('''INSERT INTO skill_catalog(id,source_id,relative_path,name,description,tags,digest,modified_at)
+                              VALUES(?,?,?,?,?,?,?,?)''',
+                           (row['id'],row['source_id'],row['relative_path'],row['name'],row['description'],
+                            json.dumps(row['tags'],ensure_ascii=False),row['digest'],row['modified_at']))
+            prefs=skill_data['skill_preferences']
+            db.execute('UPDATE skill_preferences SET enabled=?,mode=?,max_suggestions=? WHERE id=1',
+                       (int(prefs['enabled']),prefs['mode'],prefs['max_suggestions']))
         return self.snapshot()
     def seed(self):
         with self.lock:
@@ -270,9 +421,20 @@ class Store(Integrations):
         if not p:
             raise ValueError('Proyecto inexistente.')
         lines = [f"# {p['name']} — Estado maestro",f"\nÚltima actualización: {p['updated_at']}",f"Empresa: {p['company']}",f"Fase: {p['phase'] or 'Sin registrar'} | Estado: {p['status']} | Prioridad: {p['priority']}", '\n## Objetivo',p['goal'] or 'Sin registrar','\n## Próxima acción',p['next_action'] or 'Sin registrar','\n## Fuentes y entorno',f"Repositorio: {p['repository'] or 'Sin registrar'}",f"Rama: {p['branch'] or 'Sin registrar'}",f"Documentos: {p['documents'] or 'Sin registrar'}",f"Entorno: {p['environment'] or 'Sin registrar'}",'\n## Tareas']
+        skill_by_id = {s['id']: s for s in snap['skills']}
         for t in snap['tasks']:
             if t['project_id']==pid:
                 lines += [f"- #{t['id']} [{t['status']}] {t['title']} — {t['owner'] or 'Sin asignar'}" + (' | Requiere mi atención' if t['needs_me'] and t['status']!='completada' else ''),f"  Notas: {t['notes'] or '—'}",f"  Evidencia registrada: {t['evidence'] or 'Sin evidencia'}"]
+                if t['objective']: lines.append(f"  Objetivo de tarea: {t['objective']}")
+                if t['acceptance']: lines.append(f"  Criterios de aceptación: {t['acceptance']}")
+                if t['dependencies']: lines.append('  Depende de: '+', '.join('#'+str(x) for x in t['dependencies']))
+                if t['ai_profile'] or t['role']: lines.append(f"  IA/rol: {t['ai_profile'] or 'Sin asignar'} / {t['role'] or 'Sin asignar'}")
+                if t['skill_refs']:
+                    lines.append('  Skills seleccionados: '+', '.join(skill_by_id.get(x,{}).get('name','Skill #'+str(x)) for x in t['skill_refs']))
+                if t['branch'] or t['commit_ref'] or t['pull_request']:
+                    lines.append(f"  Git: rama {t['branch'] or '—'}; commit {t['commit_ref'] or '—'}; PR {t['pull_request'] or '—'}")
+                if t['tests']: lines.append(f"  Pruebas: {t['tests']}")
+                if t['checkpoint']: lines.append(f"  Punto de reanudación: {t['checkpoint']}")
         lines += ['\n## Decisiones y actividad reciente']
         evs = [e for e in snap['events'] if e['project_id']==pid]
         selected = [e for e in evs if e['kind']=='decision'] + [e for e in evs if e['kind']!='decision'][:30]
@@ -287,9 +449,37 @@ class Store(Integrations):
                 lines += [f"- {label} / {account['label']}: {role}. Estado: {bool(source['sync_state'])}; decisiones: {bool(source['sync_decisions'])}; perfil habilitado: {bool(account['enabled'])}."]
         lines += ['\n## Instrucciones para continuar','Lee las fuentes actuales antes de modificar. Este estado contiene registros del usuario, no verificaciones automáticas. Distingue propuestas, cambios implementados y resultados verificados. Respeta las ramas y entornos autorizados. Al finalizar, devuelve cambios, evidencias, bloqueos y próxima acción para registrarlos en Proyecta.']
         return '\n'.join(lines)+'\n'
+    def task_context(self, tid):
+        snap = self.snapshot()
+        task = next((t for t in snap['tasks'] if t['id'] == tid), None)
+        if not task: raise ValueError('Tarea inexistente.')
+        project = next(p for p in snap['projects'] if p['id'] == task['project_id'])
+        skills = {s['id']:s for s in snap['skills']}
+        lines = [f"# Tarea #{task['id']}: {task['title']}", '', f"Proyecto: {project['name']} · {project['company']}",
+                 f"Estado: {task['status']} · Entorno: {task['execution_environment']}",
+                 f"Responsable: {task['owner'] or 'Sin asignar'} · IA: {task['ai_profile'] or 'Sin asignar'} · Rol: {task['role'] or 'Sin asignar'}",
+                 '', '## Objetivo', task['objective'] or task['notes'] or 'Sin registrar',
+                 '', '## Criterios de aceptación', task['acceptance'] or 'Sin registrar',
+                 '', '## Dependencias', ', '.join('#'+str(x) for x in task['dependencies']) or 'Ninguna',
+                 '', '## Punto de reanudación', task['checkpoint'] or 'Sin registrar',
+                 '', '## Skills seleccionados']
+        for sid in task['skill_refs']:
+            skill=skills.get(sid)
+            if skill: lines.append(f"- {skill['name']} ({skill['provider_label']}): {skill['description']} · {skill['path']}")
+        if not task['skill_refs']: lines.append('Ninguno. El usuario puede consultar el Asesor de skills.')
+        lines += ['', '## Repositorio y evidencia', f"Repositorio: {project['repository'] or 'Sin registrar'}",
+                  f"Rama de proyecto: {project['branch'] or 'Sin registrar'}", f"Rama de tarea: {task['branch'] or 'Sin registrar'}",
+                  f"Commit: {task['commit_ref'] or 'Sin registrar'}", f"Pull request: {task['pull_request'] or 'Sin registrar'}",
+                  f"Pruebas: {task['tests'] or 'Sin registrar'}", f"Resultado/evidencia: {task['evidence'] or 'Sin registrar'}",
+                  '', '## Decisiones pertinentes']
+        decisions = [e for e in snap['events'] if e['project_id']==project['id'] and e['kind']=='decision']
+        lines.extend('- '+e['text'] for e in decisions[:30])
+        if not decisions: lines.append('Sin decisiones registradas.')
+        lines += ['', '## Instrucciones', 'Implementa exclusivamente el alcance descrito. No afirmes que un cambio está completo sin evidencia. No cambies de rama, entorno, alcance o decisiones aprobadas sin registrarlo y solicitar revisión humana. Al finalizar, devuelve un resumen, archivos cambiados, rama/commit/PR, pruebas y bloqueos.']
+        return '\n'.join(lines)+'\n'
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = 'Proyecta/1.0'
+    server_version = 'Proyecta/1.2'
     def log_message(self, fmt, *args):
         pass
     def headers_ok(self, write=False):
@@ -320,6 +510,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.respond(self.server.store.snapshot())
         if path=='/api/session':
             return self.respond({'token':self.server.token,'version':VERSION})
+        if path=='/api/skills/discover':
+            return self.respond({'directories':self.server.store.discover_skill_directories()})
         if path=='/api/backup':
             return self.respond(self.server.store.snapshot(),filename='proyecta-backup.json')
         if path=='/api/export':
@@ -334,6 +526,12 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 pid = int(path.rsplit('/',1)[-1])
                 return self.respond(self.server.store.context(pid),content_type='text/markdown; charset=utf-8',filename=f'PROJECT_STATUS_{pid}.md')
+            except ValueError as e:
+                return self.respond({'error':str(e)},404)
+        if path.startswith('/api/task-context/'):
+            try:
+                tid = int(path.rsplit('/',1)[-1])
+                return self.respond(self.server.store.task_context(tid),content_type='text/markdown; charset=utf-8',filename=f'TASK_{tid}.md')
             except ValueError as e:
                 return self.respond({'error':str(e)},404)
         if path.startswith('/api/prompt/'):
@@ -365,6 +563,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self.respond(self.server.store.preview_exchange(obj))
             if path=='/api/accounts' and self.command=='POST':
                 return self.respond(self.server.store.save_account(obj))
+            if path=='/api/skills/source' and self.command=='POST':
+                return self.respond(self.server.store.save_skill_source(obj))
+            if path=='/api/skills/source/delete' and self.command=='POST':
+                return self.respond(self.server.store.delete_skill_source(obj))
+            if path=='/api/skills/scan' and self.command=='POST':
+                return self.respond(self.server.store.scan_skill_sources(obj))
+            if path=='/api/skills/preferences' and self.command=='POST':
+                return self.respond(self.server.store.save_skill_preferences(obj))
+            if path=='/api/skills/recommend' and self.command=='POST':
+                return self.respond(self.server.store.recommend_skills(obj))
             if path=='/api/sources' and self.command=='POST':
                 return self.respond(self.server.store.save_sources(obj))
             if path=='/api/exchange/apply' and self.command=='POST':

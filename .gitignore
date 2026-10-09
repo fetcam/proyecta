@@ -6,6 +6,7 @@ __pycache__/
 node_modules/
 .env
 before-import-*.json
+.unlazy/
 
 # Capturas históricas de la interfaz 1.0
 /CONTEXTO.png

@@ -1,21 +1,23 @@
-# Proyecta 1.1 — Centro de control local
+# Proyecta 1.2 — Centro de control local
 
 Repositorio central: https://github.com/fetcam/proyecta
 
 Python 3.10+ y SQLite. Sin dependencias para ejecutar la aplicación. Linux Mint primero; código portable para Windows y macOS. No probado en esos equipos.
 
-## Arranque y actualización desde 1.0
+## Arranque y actualización desde 1.0 o 1.1
 
-1. Detén Proyecta 1.0 y descarga un respaldo desde la aplicación.
+1. Detén la versión que estés usando y descarga un respaldo desde la aplicación.
 2. Extrae este paquete en una carpeta nueva; no borres el directorio de datos.
 3. En la carpeta con `app.py`, ejecuta `python3 app.py` (Windows: `python app.py`).
 4. Abre http://127.0.0.1:8765.
 
-Usa el mismo `--data-dir` si lo habías personalizado. Los datos existentes se conservan y las nuevas tablas se crean al arrancar. No ejecutes versiones 1.0 y 1.1 simultáneamente. El respaldo 1.1 incluye perfiles, selecciones y registros de deduplicación. Un respaldo antiguo se puede restaurar, pero reemplaza todo el estado y no contiene las nuevas selecciones.
+Usa el mismo `--data-dir` si lo habías personalizado. Los datos existentes se conservan y las nuevas tablas se crean al arrancar. No ejecutes dos versiones simultáneamente. La migración 1.2 agrega campos de tareas y tablas para el catálogo sin borrar los datos existentes. El respaldo 1.2 incluye perfiles, selecciones, deduplicación, skills y preferencias. Los respaldos 1.0/1.1 se aceptan; restaurarlos reemplaza el estado actual y los campos nuevos toman valores predeterminados.
 
 `start.sh`, `start.bat` e `install_desktop.py` conservan el arranque y acceso de escritorio originales.
 
 ## Qué incorpora esta versión
+
+- Flujo de tareas de producción: pendiente, lista, en curso, bloqueada, revisión, validación y completada; criterios de aceptación, dependencias, IA/rol, entorno, rama, commit, PR, pruebas y punto de reanudación. No permite completar con dependencias pendientes ni sin evidencia.
 
 - Tablero con proyecto, empresa, fase/estado, último avance, próximo paso, IA usada, GitHub y Drive.
 - Fases: Diseño, MVP, Desarrollo, Pruebas y Listo. Separadas del estado operativo activo/pausado/completado.
@@ -24,6 +26,12 @@ Usa el mismo `--data-dir` si lo habías personalizado. Los datos existentes se c
 - Intercambio de resúmenes JSON con revisión por elemento, comparación con el estado actual, deduplicación y protección contra cambios simultáneos.
 - Procedencia en el historial: herramienta, etiqueta del perfil y referencia del resumen.
 - Puente MCP local para clientes compatibles, limitado a un proyecto y perfil.
+
+## Asesor de skills
+
+En **Asesor de skills**, Proyecta lista si existen ubicaciones habituales (`~/.agents/skills`, `~/.codex/skills`, `~/.claude/skills` y equivalentes del proyecto) sin recorrer otras carpetas. Elige qué directorio agregar, asigna cada fuente a un entorno (por ejemplo Codex o Claude Code) y escanéala. Puedes indicar una carpeta individual con `SKILL.md` o una carpeta padre con subcarpetas de skills. El catálogo solo guarda nombre, descripción, etiquetas, ruta relativa y huella. El escaneo lee hasta 64 KB por `SKILL.md`, no sigue enlaces simbólicos y tiene límites de cantidad.
+
+Las recomendaciones locales comparan el título, objetivo, criterios, notas y etapa con el nombre, descripción y etiquetas. Muestran los términos coincidentes y compatibilidad del proveedor. Puedes revisar hasta tres opciones, seleccionarlas, asociarlas a una tarea u omitirlas. En preferencias eliges sugerencia manual, al abrir una tarea o al editar su alcance. Proyecta no ejecuta ni instala skills; al quitar una fuente, sus referencias se retiran de las tareas y queda una nota de actividad.
 
 ## Configurar un proyecto
 
@@ -89,7 +97,7 @@ El puente no inicia sesión en Claude o ChatGPT: utiliza la sesión que ya tiene
 
 ## Alcance real de las integraciones
 
-| Fuente | Disponible en 1.1 | Pendiente |
+| Fuente | Disponible en 1.2 | Pendiente |
 |---|---|---|
 | ChatGPT Personal, Business, Work | Perfiles y resúmenes revisados | Acceso automático al historial / OAuth de cuenta |
 | Claude | Perfiles y resúmenes revisados | Acceso automático al historial |
@@ -104,7 +112,9 @@ Documentación consultada: https://developers.openai.com/siwc/quickstart y https
 ## Verificación
 
 ```bash
-python3 -m unittest discover -s tests -v
+PYTHONPATH=tests python3 -m unittest test_app.StoreTests test_integrations.IntegrationTests test_skills -v
+node --check static/app.js
+node tests/ui-skill-advisor.cjs
 ```
 
-23 pruebas de datos, API y protocolo MCP. Los flujos DOM de `ui-smoke.cjs` y `ui-integrations.cjs` requieren jsdom en un entorno de pruebas separado. Pasaron los flujos de perfiles, selección por proyecto, importación parcial, duplicados, tablero y los flujos anteriores. No validan el renderizado visual del navegador. La prueba Chromium no pudo ejecutarse en este entorno porque su descarga falló.
+La prueba de regresión cubre tareas, dependencias, importación anterior, perfiles, intercambio, MCP simulado y el catálogo del Asesor. El contrato estático de UI valida las acciones y textos principales; los flujos DOM antiguos requieren `jsdom`, que no está instalado aquí. No se validó el renderizado Chromium ni una instalación real en Linux Mint/Windows/macOS.
