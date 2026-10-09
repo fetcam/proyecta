@@ -1,0 +1,11 @@
+{
+  "schema": "proyecta.summary.v1",
+  "source_ref": "DEMO: sustituir por referencia real de la conversación o artefacto",
+  "state": {
+    "goal": "DEMO: terminar el MVP del proyecto",
+    "status": "activo",
+    "next_action": "DEMO: revisar el repositorio y validar pendientes",
+    "latest_progress": "DEMO: especificación preparada; implementación sin verificar"
+  },
+  "decisions": ["DEMO: conservar GitHub como fuente técnica y Drive como fuente documental"]
+}
