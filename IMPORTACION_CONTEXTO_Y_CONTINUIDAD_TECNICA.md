@@ -1,5 +1,9 @@
 # Importación de contexto y continuidad técnica
 
+## Estado en Proyecta 1.3
+
+Implementada la fase guiada: prompt de captura para ChatGPT Personal/Business/Work, Claude, Claude Code, Codex/Cloud y otras fuentes; carga/pegado del JSON normalizado; revisión y selección de afirmaciones; diferencias y duplicados; control de versión; procedencia por elemento; tareas pendientes; respaldo schema 3; expediente técnico Markdown. No se leen cuentas ni se parsean exportaciones nativas de conversaciones. La comparación con el repositorio y la verificación de CI siguen siendo manuales.
+
 ## Objetivo
 
 Permitir que Proyecta incorpore proyectos ya trabajados en ChatGPT Personal, ChatGPT Business/Work, Codex Cloud y otras herramientas de IA. A partir del contexto seleccionado, debe reconstruir un expediente técnico actual, mostrar qué está confirmado y qué falta, y permitir continuar el desarrollo sin volver a capturar manualmente toda la información.

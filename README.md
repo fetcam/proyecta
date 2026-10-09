@@ -107,11 +107,11 @@ El puente no inicia sesión en Claude o ChatGPT: utiliza la sesión que ya tiene
 
 Iniciar sesión con ChatGPT no concede acceso a sus conversaciones. La API de conversaciones de OpenAI no equivale al historial de una cuenta ChatGPT. Esta versión no ofrece botones de conexión ficticios ni reutiliza cookies del navegador.
 
-## Próxima evolución: importar proyectos y continuar desarrollo
+## Importar proyectos y continuar desarrollo
 
-La siguiente capacidad propuesta permitirá capturar contexto de proyectos existentes en ChatGPT Personal, Business/Work, Codex Cloud y otros agentes; revisar el estado contra el repositorio; y generar un expediente técnico versionado con diseño, avance por componente, brechas, backlog, pruebas, decisiones y prompt de continuidad. La 1.2 no hace esta importación automática. El alcance, límites por proveedor, fases y criterios de aceptación están en [`IMPORTACION_CONTEXTO_Y_CONTINUIDAD_TECNICA.md`](IMPORTACION_CONTEXTO_Y_CONTINUIDAD_TECNICA.md).
+En **Importar contexto**, elige crear un proyecto o actualizar uno existente, selecciona ChatGPT Personal/Business/Work, Claude, Claude Code, Codex/Cloud u otra fuente y genera un prompt de extracción. Pega o carga el JSON resultante, revisa las diferencias y selecciona qué incorporar. Se conservan la fuente y la certeza por elemento; las pruebas y avances conversacionales quedan como declaraciones, no como verificación de código. El backlog aceptado crea tareas pendientes. Desde la ficha del proyecto puedes descargar el expediente técnico Markdown. El formato, límites y criterios están en [`IMPORTACION_CONTEXTO_Y_CONTINUIDAD_TECNICA.md`](IMPORTACION_CONTEXTO_Y_CONTINUIDAD_TECNICA.md).
 
-ChatGPT Personal puede ofrecer exportación de datos; ChatGPT Business no ofrece exportación autoservicio de conversaciones. Por eso, la primera fase se apoya en prompts de captura y resúmenes elegidos por el usuario, con revisión antes de importar. Las futuras conexiones solo usarán APIs oficiales y permisos explícitos.
+La importación de contexto es guiada y manual: Proyecta no parsea archivos nativos de exportación de ChatGPT Personal ni ofrece conexión directa a ChatGPT Business o Claude. Se captura el proyecto desde la herramienta de origen mediante el prompt y se revisa el JSON antes de incorporarlo. No pegues secretos ni historiales completos.
 
 Documentación consultada: https://developers.openai.com/siwc/quickstart y https://support.claude.com/es/articles/13346720-exporta-los-datos-de-tu-organizacion (8 octubre 2026).
 

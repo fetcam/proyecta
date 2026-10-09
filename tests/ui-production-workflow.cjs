@@ -8,5 +8,5 @@ assert.ok(js.includes('/api/task-context/'), 'task context export link');
 assert.match(js, /Preparar contexto/);
 assert.match(js, /Criterios de aceptación/);
 assert.match(js, /Punto de reanudación/);
-assert.match(html, /Flujo básico de producción/);
+assert.match(html, /Continuidad técnica e importación revisada de proyectos/);
 console.error('Production task workflow UI contract passed');

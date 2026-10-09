@@ -179,4 +179,33 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(self.request('/api/projects/1',dict(old,name='Segundo'),method='PUT')[0],409)
         self.assertEqual(self.request('/api/ask',dict(project_id=404,question='estado'))[0],400)
 
+    def test_context_import_prompt_preview_apply_and_dossier_routes(self):
+        status,body,headers=self.request('/api/context-import/prompt/claude')
+        self.assertEqual(status,200)
+        self.assertIn('proyecta.context.v1',body.decode())
+        self.assertIn('text/plain',headers['Content-Type'])
+        payload={
+            'schema':'proyecta.context.v1',
+            'project':{'name':'API Atlas','company':'Savetek','goal':'Continuidad','status':'activo',
+                       'phase':'MVP','next_action':'Importar','repository':'','branch':'','documents':'','environment':''},
+            'design':{'functional':'','technical':''},'components':[],'decisions':[],
+            'backlog':[{'title':'Primera tarea','objective':'Continuar','acceptance':'Validar la carga',
+                        'priority':'media','dependencies':[]}],
+            'tests':[],'risks':[],'latest_progress':''}
+        status,body,_=self.request('/api/context-import/preview',{
+            'project_id':None,'provider':'claude','source_label':'Proyecto Claude',
+            'source_ref':'https://claude.ai/project/atlas','payload':payload})
+        self.assertEqual(status,200)
+        preview=json.loads(body)
+        status,body,_=self.request('/api/context-import/apply',{
+            'project_id':None,'version':None,'provider':preview['provider'],'source_label':preview['source_label'],
+            'source_ref':preview['source_ref'],'payload':preview['payload'],
+            'selected':[x['digest'] for x in preview['items']]})
+        self.assertEqual(status,200)
+        result=json.loads(body)
+        self.assertEqual(result['tasks_created'],1)
+        status,body,_=self.request('/api/context-dossier/'+str(result['project_id']))
+        self.assertEqual(status,200)
+        self.assertIn('declaradas por la fuente',body.decode())
+
 if __name__=='__main__':unittest.main()

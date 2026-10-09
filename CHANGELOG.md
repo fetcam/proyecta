@@ -1,5 +1,11 @@
 # Cambios
 
+## 1.3.0 — 9 octubre 2026
+
+Importación guiada de proyectos desde ChatGPT Personal/Business/Work, Claude, Claude Code y Codex/Cloud. El usuario prepara el JSON con un prompt, compara los elementos con el proyecto y selecciona qué guardar. Se registra procedencia por elemento, se omiten duplicados, se rechaza una revisión obsoleta y el backlog aprobado crea tareas pendientes. El expediente técnico se descarga como Markdown. Los respaldos pasan a schema 3 y siguen aceptando versiones 1 y 2.
+
+La importación no inicia sesión ni procesa exportaciones nativas de conversaciones. El sistema conserva solo los elementos aceptados y clasifica avances/pruebas como declaraciones de la fuente.
+
 ## 1.2.0 — 9 octubre 2026
 
 Asesor local de skills con fuentes explícitas, escaneo acotado de metadatos, recomendaciones explicables, preferencias por momento/proveedor y asociación manual a tareas. Flujo de tareas de producción con ciclo de vida, aceptación, dependencias, rol/IA, entorno, evidencia de código/pruebas, PR y checkpoint. Contextos de tarea y backups compatibles con datos anteriores.

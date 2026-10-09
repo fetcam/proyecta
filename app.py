@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Proyecta 1.2: local-first project control center, Python standard library only."""
+"""Proyecta 1.3: local-first project control center, Python standard library only."""
 import argparse
 from contextlib import contextmanager
 import io
@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
-VERSION = '1.2.0'
+VERSION = '1.3.0'
 ROOT = Path(__file__).resolve().parent
 MAX_BODY = 5 * 1024 * 1024
 STATUSES = ('pendiente', 'lista', 'en_curso', 'bloqueada', 'en_revision', 'en_validacion', 'completada')
@@ -51,9 +51,10 @@ def link(value):
     return value
 
 from integrations import Integrations
+from context_imports import ContextImports
 from skills import Skills, SKILL_PROVIDERS
 
-class Store(Skills, Integrations):
+class Store(Skills, Integrations, ContextImports):
     def __init__(self, path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -101,6 +102,7 @@ class Store(Skills, Integrations):
             db.execute('PRAGMA user_version=2')
             self.init_integrations(db)
             self.init_skills(db)
+            self.init_context_imports(db)
     @contextmanager
     def connect(self):
         db = sqlite3.connect(self.path, timeout=10)
@@ -113,7 +115,7 @@ class Store(Skills, Integrations):
             db.close()
     def snapshot(self):
         with self.lock, self.connect() as db:
-            return {**self.integration_snapshot(db), **self.skill_snapshot(db), 'schema_version': 2, 'app_version': VERSION, 'exported_at': now(),
+            return {**self.integration_snapshot(db), **self.skill_snapshot(db), **self.context_import_snapshot(db), 'schema_version': 3, 'app_version': VERSION, 'exported_at': now(),
                     'projects': [dict(r) for r in db.execute('SELECT * FROM projects ORDER BY id')],
                     'tasks': [self.task_record(dict(r)) for r in db.execute('SELECT * FROM tasks ORDER BY id')],
                     'events': [dict(r) for r in db.execute('SELECT * FROM events ORDER BY id DESC')]}
@@ -256,7 +258,7 @@ class Store(Skills, Integrations):
             raise RuntimeError('Este registro cambió en otra ventana. Recarga antes de guardar.')
         return row
     def import_snapshot(self, obj):
-        if not isinstance(obj,dict) or obj.get('schema_version') not in (1, 2):
+        if not isinstance(obj,dict) or obj.get('schema_version') not in (1, 2, 3):
             raise ValueError('Formato de respaldo incompatible.')
         projects, tasks, events = (obj.get(k) for k in ('projects','tasks','events'))
         if not all(isinstance(x,list) for x in (projects,tasks,events)) or sum(map(len,(projects,tasks,events))) > 20000:
@@ -304,6 +306,7 @@ class Store(Skills, Integrations):
                     raise ValueError('Versión de registro inválida.')
         integrations = self.validate_integrations(obj,ids)
         skill_data = self.validate_skill_snapshot(obj)
+        context_data = self.validate_context_import_snapshot(obj,ids)
         catalog_ids = {row['id'] for row in skill_data['skills']}
         task_by_id = {row['id']: row for row in normalized_tasks}
         graph = {}
@@ -329,7 +332,7 @@ class Store(Skills, Integrations):
             # Preserve the previous state before replacing any data.
             backup = self.path.parent / ('before-import-' + datetime.now().strftime('%Y%m%d-%H%M%S') + '-' + secrets.token_hex(3) + '.json')
             backup.write_text(json.dumps(self.snapshot(),ensure_ascii=False,indent=2),encoding='utf-8')
-            for table in ('imported_items','project_sources','accounts','events','tasks','skill_catalog','skill_sources','projects'):
+            for table in ('context_import_items','context_imports','imported_items','project_sources','accounts','events','tasks','skill_catalog','skill_sources','projects'):
                 db.execute('DELETE FROM '+table)
             for table, rows in (('projects',projects),('tasks',normalized_tasks),('events',events)):
                 cols = [r[1] for r in db.execute('PRAGMA table_info('+table+')')]
@@ -357,6 +360,12 @@ class Store(Skills, Integrations):
                               VALUES(?,?,?,?,?,?,?,?)''',
                            (row['id'],row['source_id'],row['relative_path'],row['name'],row['description'],
                             json.dumps(row['tags'],ensure_ascii=False),row['digest'],row['modified_at']))
+            for row in context_data['context_imports']:
+                db.execute('INSERT INTO context_imports(id,project_id,provider,source_label,source_ref,payload_json,created_at) VALUES(?,?,?,?,?,?,?)',
+                           (row['id'],row['project_id'],row['provider'],row['source_label'],row['source_ref'],row['payload_json'],row['created_at']))
+            for row in context_data['context_import_items']:
+                db.execute('INSERT INTO context_import_items(id,import_id,project_id,provider,kind,item_key,text,certainty,evidence,digest,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+                           (row['id'],row['import_id'],row['project_id'],row['provider'],row['kind'],row['item_key'],row['text'],row['certainty'],row['evidence'],row['digest'],row['created_at']))
             prefs=skill_data['skill_preferences']
             db.execute('UPDATE skill_preferences SET enabled=?,mode=?,max_suggestions=? WHERE id=1',
                        (int(prefs['enabled']),prefs['mode'],prefs['max_suggestions']))
@@ -479,7 +488,7 @@ class Store(Skills, Integrations):
         return '\n'.join(lines)+'\n'
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = 'Proyecta/1.2'
+    server_version = 'Proyecta/1.3'
     def log_message(self, fmt, *args):
         pass
     def headers_ok(self, write=False):
@@ -512,6 +521,12 @@ class Handler(BaseHTTPRequestHandler):
             return self.respond({'token':self.server.token,'version':VERSION})
         if path=='/api/skills/discover':
             return self.respond({'directories':self.server.store.discover_skill_directories()})
+        if path.startswith('/api/context-import/prompt/'):
+            try:
+                provider=path.rsplit('/',1)[-1]
+                return self.respond(self.server.store.context_import_prompt(provider),content_type='text/plain; charset=utf-8')
+            except ValueError as e:
+                return self.respond({'error':str(e)},400)
         if path=='/api/backup':
             return self.respond(self.server.store.snapshot(),filename='proyecta-backup.json')
         if path=='/api/export':
@@ -526,6 +541,12 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 pid = int(path.rsplit('/',1)[-1])
                 return self.respond(self.server.store.context(pid),content_type='text/markdown; charset=utf-8',filename=f'PROJECT_STATUS_{pid}.md')
+            except ValueError as e:
+                return self.respond({'error':str(e)},404)
+        if path.startswith('/api/context-dossier/'):
+            try:
+                pid=int(path.rsplit('/',1)[-1])
+                return self.respond(self.server.store.context_dossier(pid),content_type='text/markdown; charset=utf-8',filename=f'EXPEDIENTE_TECNICO_{pid}.md')
             except ValueError as e:
                 return self.respond({'error':str(e)},404)
         if path.startswith('/api/task-context/'):
@@ -559,6 +580,10 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError('Se requiere JSON.')
             obj = json.loads(self.rfile.read(length))
             path = urlparse(self.path).path
+            if path=='/api/context-import/preview' and self.command=='POST':
+                return self.respond(self.server.store.preview_context_import(obj))
+            if path=='/api/context-import/apply' and self.command=='POST':
+                return self.respond(self.server.store.apply_context_import(obj))
             if path=='/api/exchange/preview' and self.command=='POST':
                 return self.respond(self.server.store.preview_exchange(obj))
             if path=='/api/accounts' and self.command=='POST':
