@@ -50,6 +50,21 @@ class SkillAdvisorTests(unittest.TestCase):
         self.assertEqual(snapshot['tasks'][0]['skill_refs'], [])
         self.assertIn('eliminada', snapshot['events'][0]['text'])
 
+    def test_discovered_source_can_be_scanned_without_scanning_every_source(self):
+        other = self.root / 'other-skills'
+        other.mkdir()
+        (other / 'demo').mkdir()
+        (other / 'demo' / 'SKILL.md').write_text(
+            '---\nname: Demo\ndescription: Demo source only.\n---\n', encoding='utf-8')
+        sources = self.store.save_skill_source(dict(label='Other', provider='other', path=str(other)))['skill_sources']
+        second = next(source for source in sources if source['path'] == str(other))
+        result = self.store.scan_skill_sources({'source_id': second['id']})
+        self.assertEqual(result['scan']['sources'], 1)
+        self.assertEqual(result['scan']['skills'], 1)
+        self.assertEqual(len(result['skill_sources']), 2)
+        with self.assertRaisesRegex(ValueError, 'no existe o está deshabilitada'):
+            self.store.scan_skill_sources({'source_id': 9999})
+
     def test_preferences_are_bounded_and_provider_scoped(self):
         self.store.scan_skill_sources()
         self.store.save_skill_preferences(dict(enabled=True, mode='on_task_edit', max_suggestions=2))

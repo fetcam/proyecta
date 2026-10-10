@@ -10,8 +10,8 @@ const projectFor=id=>state.projects.find(p=>p.id===id);
 const activeTasks=()=>state.tasks.filter(t=>t.status!=='completada');
 const needs=()=>activeTasks().filter(t=>t.needs_me);
 function toast(msg){$('#toast').textContent=msg;$('#toast').style.display='block';clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('#toast').style.display='none',4500)}
-async function request(path,method='GET',data){const response=await fetch(path,{method,headers:method==='GET'?{}:{'Content-Type':'application/json','X-Proyecta-Token':token},body:method==='GET'?undefined:JSON.stringify(data)});const result=await response.json();if(!response.ok)throw Error(result.error||'Error de conexión');return result}
-async function mutate(path,method,obj){state=await request(path,method,obj);if(path==='/api/import')token=(await request('/api/session')).token;render()}
+async function request(path,method='GET',data){let response;try{response=await fetch(path,{method,headers:method==='GET'?{}:{'Content-Type':'application/json','X-Proyecta-Token':token},body:method==='GET'?undefined:JSON.stringify(data)})}catch(error){throw Error('No se pudo contactar al servidor local de Proyecta. Verifica que siga abierto y vuelve a intentar.')}let result;try{result=await response.json()}catch(error){throw Error(`El servidor respondió con un formato inesperado (${response.status}). Reinicia Proyecta si el problema continúa.`)}if(!response.ok)throw Error(result.error||'Error de conexión');return result}
+async function mutate(path,method,obj){state=await request(path,method,obj);if(path==='/api/import')token=(await request('/api/session')).token;render();return state}
 function link(url,label){return url?`<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(label||url)}</a>`:'Sin registrar'}
 function chip(status){return `<span class="chip ${status==='pausado'?'paused':status==='bloqueada'?'blocked':status==='pendiente'?'pending':''}">${esc(statusLabel[status]||status)}</span>`}
 function heading(title,subtitle,action=''){return `<div class="heading"><div><div class="eyebrow">TU TRABAJO, EN CONTEXTO</div><h1>${title}</h1><p class="subtitle">${subtitle}</p></div>${action}</div>`}
@@ -125,7 +125,23 @@ function skillManagementPage(){
 }
 let skillTaskTarget=null;
 function bindSkillPage(){
- const discovery=$('#skill-discovery');if(discovery)request('/api/skills/discover').then(({directories})=>{discovery.innerHTML=directories.length?`<h3>Fuentes locales encontradas</h3><p class="muted">Se verificaron solo rutas conocidas; no se recorrió el disco. Puedes importar y escanear cada fuente con un clic.</p><div class="list">${directories.map((d,i)=>`<article class="row"><div class="body"><strong>${esc(d.label)}</strong><small>${esc(skillProviderLabels[d.provider])} · ${esc(d.path)}</small></div>${d.registered?'<span class="chip">Fuente agregada</span>':`<button type="button" data-add-discovered="${i}" class="secondary">Importar y escanear</button>`}</article>`).join('')}</div>`:'<p class="muted">No se encontraron skills locales de Codex o Claude Code. Para ChatGPT, agrega la carpeta de una skill descargada.</p>';discovery.querySelectorAll('[data-add-discovered]').forEach(b=>b.onclick=async()=>{const d=directories[Number(b.dataset.addDiscovered)];b.disabled=true;try{await request('/api/skills/source','POST',{label:d.label,provider:d.provider,path:d.path,enabled:true});const result=await mutate('/api/skills/scan','POST',{});toast(`Fuente importada: ${result.scan.skills} skills catalogadas.`)}catch(err){toast(err.message)}finally{b.disabled=false}})}).catch(err=>{discovery.innerHTML=`<p role="alert">No se pudieron detectar rutas habituales: ${esc(err.message)}</p>`});
+ const discovery=$('#skill-discovery');
+ if(discovery)request('/api/skills/discover').then(({directories})=>{
+  discovery.innerHTML=directories.length?`<h3>Fuentes locales encontradas</h3><p class="muted">Se verificaron solo rutas conocidas; no se recorrió el disco. Puedes importar y escanear cada fuente con un clic.</p><div class="list">${directories.map((d,i)=>`<article class="row"><div class="body"><strong>${esc(d.label)}</strong><small>${esc(skillProviderLabels[d.provider])} · ${esc(d.path)}</small></div>${d.registered?'<span class="chip">Fuente agregada</span>':`<button type="button" data-add-discovered="${i}" class="secondary">Importar y escanear</button>`}</article>`).join('')}</div>`:'<p class="muted">No se encontraron skills locales de Codex o Claude Code. Para ChatGPT, agrega la carpeta de una skill descargada.</p>';
+  discovery.querySelectorAll('[data-add-discovered]').forEach(button=>{
+   button.onclick=async()=>{
+    const item=directories[Number(button.dataset.addDiscovered)];button.disabled=true;button.textContent='Importando y escaneando…';
+    try{
+     const saved=await request('/api/skills/source','POST',{label:item.label,provider:item.provider,path:item.path,enabled:true});
+     const source=saved.skill_sources.find(row=>row.provider===item.provider&&row.path===item.path);
+     if(!source)throw Error('La fuente se guardó, pero no se pudo localizar para escanearla.');
+     state=await request('/api/skills/scan','POST',{source_id:source.id});render();
+     const scan=state.scan;
+     toast(scan.errors.length?`Fuente importada; ${scan.skills} skills catalogadas y ${scan.errors.length} elementos omitidos.`:`Fuente importada: ${scan.skills} skills catalogadas.`);
+    }catch(error){toast(error.message);button.disabled=false;button.textContent='Reintentar importación'}
+   };
+  });
+ }).catch(error=>{discovery.innerHTML=`<p role="alert">No se pudieron detectar rutas habituales: ${esc(error.message)}</p>`});
  const source=$('#skill-source-form');if(source)source.onsubmit=async e=>{e.preventDefault();const obj=Object.fromEntries(new FormData(source));try{await mutate('/api/skills/source','POST',obj);toast('Fuente registrada. Escanéala para actualizar el catálogo.')}catch(err){toast(err.message)}};
  $('#scan-skills')?.addEventListener('click',async()=>{try{const result=await mutate('/api/skills/scan','POST',{});toast(`Escaneo listo: ${result.scan.skills} skills, ${result.scan.skipped} omitidas.`);if(result.scan.errors.length)toast(`${result.scan.errors.length} elementos omitidos; revisa rutas y permisos.`)}catch(err){toast(err.message)}});
  document.querySelectorAll('[data-remove-skill-source]').forEach(b=>b.onclick=async()=>{if(!confirm('Quitar esta fuente también quitará sus skills vinculados a tareas. ¿Continuar?'))return;try{await mutate('/api/skills/source/delete','POST',{id:Number(b.dataset.removeSkillSource)});toast('Fuente quitada.')}catch(err){toast(err.message)}});

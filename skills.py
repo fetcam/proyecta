@@ -321,8 +321,21 @@ class Skills:
         return self.snapshot()
 
     def scan_skill_sources(self, obj=None):
+        source_id = None
+        if obj is not None:
+            if not isinstance(obj, dict) or set(obj) - {'source_id'}:
+                raise ValueError('Solicitud de escaneo inválida.')
+            source_id = obj.get('source_id')
+            if source_id is not None and (type(source_id) is not int or source_id <= 0):
+                raise ValueError('Fuente de skills inválida.')
         with self.lock, self.connect() as db:
-            sources = [dict(row) for row in db.execute('SELECT * FROM skill_sources WHERE enabled=1 ORDER BY id')]
+            if source_id is None:
+                source_rows = db.execute('SELECT * FROM skill_sources WHERE enabled=1 ORDER BY id').fetchall()
+            else:
+                source_rows = db.execute('SELECT * FROM skill_sources WHERE enabled=1 AND id=?', (source_id,)).fetchall()
+                if not source_rows:
+                    raise ValueError('La fuente no existe o está deshabilitada.')
+            sources = [dict(row) for row in source_rows]
             totals = {'sources': len(sources), 'skills': 0, 'skipped': 0, 'errors': []}
             for source in sources:
                 root = Path(source['path']).expanduser()
