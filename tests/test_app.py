@@ -1,5 +1,6 @@
 import copy
 import json
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -34,6 +35,25 @@ class StoreTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.store.save('tasks',self.task(status='completada'))
         snap=self.store.save('tasks',self.task(status='completada',evidence='Prueba #14: archivo abierto; 200 filas.'))
         self.assertEqual(snap['tasks'][0]['status'],'completada')
+    def test_production_task_fields_dependencies_and_handoff_context(self):
+        first=self.store.save('tasks',self.task(title='Definir API',status='lista'))['tasks'][0]
+        second=self.store.save('tasks',self.task(title='Implementar API',status='en_curso',needs_me=False,
+            objective='Crear endpoint local',acceptance='Responde JSON validado',dependencies=[first['id']],
+            ai_profile='codex',role='implementacion',branch='feature/api',commit_ref='abc123',
+            pull_request='https://example.com/pr/1',tests='3 pruebas pasan',checkpoint='Continuar con auth.'))['tasks'][1]
+        with self.assertRaisesRegex(ValueError,'Completa primero'):
+            self.store.save('tasks',dict(second,status='completada',needs_me=True,evidence='Implementado.'),second['id'])
+        self.store.save('tasks',dict(first,status='completada',needs_me=True,evidence='API validada.'),first['id'])
+        completed=self.store.save('tasks',dict(second,status='completada',needs_me=False,evidence='Merge listo.'),second['id'])['tasks'][1]
+        self.assertEqual(completed['dependencies'],[first['id']])
+        context=self.store.task_context(second['id'])
+        for evidence in ('Responde JSON validado','feature/api','abc123','3 pruebas pasan','Continuar con auth.'):
+            self.assertIn(evidence,context)
+    def test_task_dependency_cycle_is_rejected(self):
+        first=self.store.save('tasks',self.task(title='Primera'))['tasks'][0]
+        second=self.store.save('tasks',self.task(title='Segunda',dependencies=[first['id']]))['tasks'][1]
+        with self.assertRaisesRegex(ValueError,'ciclo'):
+            self.store.save('tasks',dict(first,needs_me=True,dependencies=[second['id']]),first['id'])
     def test_stale_edit_is_rejected(self):
         old=self.store.snapshot()['projects'][0]
         first=dict(old,name='Nuevo')
@@ -64,6 +84,20 @@ class StoreTests(unittest.TestCase):
             with self.assertRaises(ValueError):self.store.save('projects',dict(self.p,repository=url))
     def test_task_cannot_attach_to_missing_project(self):
         with self.assertRaises(ValueError):self.store.save('tasks',self.task(project_id=999))
+    def test_v11_sqlite_database_migrates_additively(self):
+        old_path=Path(self.temp.name)/'v11.sqlite3'
+        db=sqlite3.connect(old_path)
+        db.executescript('''CREATE TABLE projects(id INTEGER PRIMARY KEY,name TEXT NOT NULL,company TEXT NOT NULL,goal TEXT NOT NULL,status TEXT NOT NULL,priority TEXT NOT NULL,next_action TEXT NOT NULL,repository TEXT NOT NULL,branch TEXT NOT NULL,documents TEXT NOT NULL,environment TEXT NOT NULL,updated_at TEXT NOT NULL,version INTEGER NOT NULL DEFAULT 1);
+        CREATE TABLE tasks(id INTEGER PRIMARY KEY,project_id INTEGER NOT NULL,title TEXT NOT NULL,status TEXT NOT NULL,needs_me INTEGER NOT NULL,owner TEXT NOT NULL,notes TEXT NOT NULL,evidence TEXT NOT NULL,updated_at TEXT NOT NULL,version INTEGER NOT NULL DEFAULT 1);
+        CREATE TABLE events(id INTEGER PRIMARY KEY,project_id INTEGER NOT NULL,kind TEXT NOT NULL,actor TEXT NOT NULL,text TEXT NOT NULL,evidence TEXT NOT NULL,created_at TEXT NOT NULL);
+        INSERT INTO projects VALUES(1,'Old','Savetek','Goal','activo','alta','Next','','','', '', '2026-10-01T00:00:00+00:00',1);
+        INSERT INTO tasks VALUES(1,1,'Existing','en_curso',0,'Codex','Notes','','2026-10-01T00:00:00+00:00',1);''')
+        db.commit();db.close()
+        migrated=Store(old_path).snapshot()
+        self.assertEqual(migrated['projects'][0]['name'],'Old')
+        self.assertEqual(migrated['tasks'][0]['objective'],'')
+        self.assertEqual(migrated['tasks'][0]['dependencies'],[])
+        self.assertEqual(migrated['skill_preferences']['mode'],'manual')
     def test_context_contains_decisions_evidence_and_constraints(self):
         self.store.save('events',dict(project_id=1,kind='decision',actor='Samuel',text='No modificar main.',evidence='Autorización registrada.'))
         self.store.save('tasks',self.task(status='completada',evidence='200 filas verificadas.'))
@@ -144,5 +178,34 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(self.request('/api/projects/1',dict(old,name='Primero'),method='PUT')[0],200)
         self.assertEqual(self.request('/api/projects/1',dict(old,name='Segundo'),method='PUT')[0],409)
         self.assertEqual(self.request('/api/ask',dict(project_id=404,question='estado'))[0],400)
+
+    def test_context_import_prompt_preview_apply_and_dossier_routes(self):
+        status,body,headers=self.request('/api/context-import/prompt/claude')
+        self.assertEqual(status,200)
+        self.assertIn('proyecta.context.v1',body.decode())
+        self.assertIn('text/plain',headers['Content-Type'])
+        payload={
+            'schema':'proyecta.context.v1',
+            'project':{'name':'API Atlas','company':'Savetek','goal':'Continuidad','status':'activo',
+                       'phase':'MVP','next_action':'Importar','repository':'','branch':'','documents':'','environment':''},
+            'design':{'functional':'','technical':''},'components':[],'decisions':[],
+            'backlog':[{'title':'Primera tarea','objective':'Continuar','acceptance':'Validar la carga',
+                        'priority':'media','dependencies':[]}],
+            'tests':[],'risks':[],'latest_progress':''}
+        status,body,_=self.request('/api/context-import/preview',{
+            'project_id':None,'provider':'claude','source_label':'Proyecto Claude',
+            'source_ref':'https://claude.ai/project/atlas','payload':payload})
+        self.assertEqual(status,200)
+        preview=json.loads(body)
+        status,body,_=self.request('/api/context-import/apply',{
+            'project_id':None,'version':None,'provider':preview['provider'],'source_label':preview['source_label'],
+            'source_ref':preview['source_ref'],'payload':preview['payload'],
+            'selected':[x['digest'] for x in preview['items']]})
+        self.assertEqual(status,200)
+        result=json.loads(body)
+        self.assertEqual(result['tasks_created'],1)
+        status,body,_=self.request('/api/context-dossier/'+str(result['project_id']))
+        self.assertEqual(status,200)
+        self.assertIn('declaradas por la fuente',body.decode())
 
 if __name__=='__main__':unittest.main()
